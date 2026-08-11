@@ -1,0 +1,17 @@
+# PulseNews AI — Prometheus Configuration
+# Volume 13: DevOps & Monitoring skeleton
+
+global:
+  scrape_interval: 15s
+  evaluation_interval: 15s
+
+scrape_configs:
+  - job_name: "pulsenews-backend"
+    metrics_path: /api/metrics
+    static_configs:
+      - targets: ["backend:3001"]
+
+  - job_name: "pulsenews-frontend"
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["frontend:3000"]

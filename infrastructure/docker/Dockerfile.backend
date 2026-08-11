@@ -1,0 +1,15 @@
+# PulseNews AI — Backend Dockerfile
+# Express + Socket.io + TypeScript server
+
+FROM node:20-alpine
+
+WORKDIR /app
+
+COPY package.json package-lock.json* bun.lock* ./
+RUN npm install
+
+COPY . .
+
+EXPOSE 3001
+
+CMD ["npx", "tsx", "server.ts"]

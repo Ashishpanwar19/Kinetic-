@@ -1,0 +1,118 @@
+# PulseNews AI — Docker Compose (Development)
+# Multi-service orchestration for local development
+# Volume 1: Foundation skeleton — services will be fleshed out in subsequent volumes
+
+version: "3.9"
+
+services:
+  # ──────────────────────────────────────────────────
+  # Frontend (React + Vite)
+  # ──────────────────────────────────────────────────
+  frontend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.frontend
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - VITE_API_URL=http://localhost:3001
+    volumes:
+      - ./src:/app/src
+      - ./index.html:/app/index.html
+      - ./vite.config.ts:/app/vite.config.ts
+      - ./package.json:/app/package.json
+      - ./tsconfig.json:/app/tsconfig.json
+    depends_on:
+      - backend
+    networks:
+      - pulsenews-net
+
+  # ──────────────────────────────────────────────────
+  # Backend (Express + Socket.io)
+  # ──────────────────────────────────────────────────
+  backend:
+    build:
+      context: .
+      dockerfile: infrastructure/docker/Dockerfile.backend
+    ports:
+      - "3001:3001"
+    environment:
+      - NODE_ENV=development
+      - PORT=3001
+      - GEMINI_API_KEY=${GEMINI_API_KEY:-}
+      - SUPABASE_URL=${SUPABASE_URL:-}
+      - SUPABASE_ANON_KEY=${SUPABASE_ANON_KEY:-}
+      - SUPABASE_SERVICE_ROLE_KEY=${SUPABASE_SERVICE_ROLE_KEY:-}
+    volumes:
+      - ./server.ts:/app/server.ts
+      - ./server:/app/server
+      - ./package.json:/app/package.json
+      - ./tsconfig.json:/app/tsconfig.json
+    networks:
+      - pulsenews-net
+
+  # ──────────────────────────────────────────────────
+  # Redis (Queue & Cache — Volume 3+)
+  # ──────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+    networks:
+      - pulsenews-net
+    restart: unless-stopped
+
+  # ──────────────────────────────────────────────────
+  # Nginx Reverse Proxy (Volume 2+)
+  # ──────────────────────────────────────────────────
+  nginx:
+    image: nginx:alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./infrastructure/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - frontend
+      - backend
+    networks:
+      - pulsenews-net
+    profiles: ["full"]
+
+  # ──────────────────────────────────────────────────
+  # Prometheus (Monitoring — Volume 13+)
+  # ──────────────────────────────────────────────────
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infrastructure/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+    networks:
+      - pulsenews-net
+    profiles: ["monitoring"]
+
+  # ──────────────────────────────────────────────────
+  # Grafana (Dashboards — Volume 13+)
+  # ──────────────────────────────────────────────────
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3002:3000"
+    environment:
+      - GF_SECURITY_ADMIN_PASSWORD=admin
+    volumes:
+      - grafana-data:/var/lib/grafana
+    networks:
+      - pulsenews-net
+    profiles: ["monitoring"]
+
+volumes:
+  redis-data:
+  grafana-data:
+
+networks:
+  pulsenews-net:
+    driver: bridge
