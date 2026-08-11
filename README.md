@@ -48,8 +48,8 @@ PulseNews-AI/
 
 | Volume | Title | Status |
 |--------|-------|--------|
-| 1 | Product Vision & Foundation | In Progress |
-| 2 | Enterprise System Architecture | Pending |
+| 1 | Product Vision & Foundation | Complete |
+| 2 | Enterprise System Architecture | Complete |
 | 3 | Database & Knowledge Layer | Pending |
 | 4 | Backend Platform | Pending |
 | 5 | Frontend Platform | Pending |
@@ -104,6 +104,7 @@ See [docs/01-product-foundation/ROADMAP.md](docs/01-product-foundation/ROADMAP.m
 
 All documentation is organized by volume in the `docs/` directory:
 
+### Volume 1 — Product Foundation
 - [Product Vision](docs/01-product-foundation/VISION.md)
 - [Development Roadmap](docs/01-product-foundation/ROADMAP.md)
 - [Software Requirements](docs/01-product-foundation/SRS.md)
@@ -111,6 +112,14 @@ All documentation is organized by volume in the `docs/` directory:
 - [Business Model](docs/01-product-foundation/BUSINESS.md)
 - [Coding Standards](docs/01-product-foundation/CODING_STANDARDS.md)
 - [Environment Configuration](docs/01-product-foundation/ENVIRONMENT.md)
+
+### Volume 2 — System Architecture
+- [High-Level Architecture](docs/02-system-architecture/ARCHITECTURE.md)
+- [Microservices & Communication](docs/02-system-architecture/MICROSERVICES.md)
+- [AI Pipeline & RAG](docs/02-system-architecture/AI_PIPELINE.md)
+- [WebSocket Architecture](docs/02-system-architecture/WEBSOCKET.md)
+- [Security Architecture](docs/02-system-architecture/SECURITY.md)
+- [Deployment Topology](docs/02-system-architecture/DEPLOYMENT.md)
 
 ---
 
@@ -122,4 +131,4 @@ Proprietary — All rights reserved.
 
 ## Version
 
-**Blueprint v1.0 — Volume 1: Product Vision & Foundation**
+**Blueprint v2.0 — Volume 2: Enterprise System Architecture complete**
