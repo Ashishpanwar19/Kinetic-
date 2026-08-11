@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User account profile and aggregate exam preparation statistics",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string", "description": "Firebase auth UID" },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "maxLength": 200 },
+        "photoURL": { "type": "string", "maxLength": 500 },
+        "quizzesSolved": { "type": "number" },
+        "totalQuestions": { "type": "number" },
+        "correctAnswers": { "type": "number" },
+        "accuracy": { "type": "number" },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["uid", "name", "email"]
+    },
+    "Bookmark": {
+      "title": "Bookmark",
+      "description": "User saved current affairs snippet",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "articleId": { "type": "string", "maxLength": 128 },
+        "headline": { "type": "string", "maxLength": 300 },
+        "savedAt": { "type": "string" }
+      },
+      "required": ["userId", "articleId", "headline"]
+    },
+    "QuizSubmission": {
+      "title": "QuizSubmission",
+      "description": "Record of a solved current affairs quiz",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "articleId": { "type": "string", "maxLength": 128 },
+        "headline": { "type": "string", "maxLength": 300 },
+        "score": { "type": "number" },
+        "total": { "type": "number" },
+        "percentage": { "type": "number" },
+        "completedAt": { "type": "string" }
+      },
+      "required": ["userId", "articleId", "score", "total"]
+    },
+    "ActivityLog": {
+      "title": "ActivityLog",
+      "description": "User history activity entry",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "title": { "type": "string", "maxLength": 300 },
+        "type": { "type": "string", "maxLength": 50 },
+        "detail": { "type": "string", "maxLength": 200 },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["userId", "title", "type", "detail"]
+    },
+    "ChatMessage": {
+      "title": "ChatMessage",
+      "description": "AI Chatbot conversation message",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string", "maxLength": 128 },
+        "role": { "type": "string", "enum": ["user", "model"] },
+        "text": { "type": "string", "maxLength": 4000 },
+        "timestamp": { "type": "string" }
+      },
+      "required": ["userId", "role", "text"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/UserProfile" },
+      "description": "Main user document"
+    },
+    "/users/{userId}/bookmarks/{bookmarkId}": {
+      "schema": { "$ref": "#/entities/Bookmark" },
+      "description": "User saved snippets"
+    },
+    "/users/{userId}/quiz_submissions/{submissionId}": {
+      "schema": { "$ref": "#/entities/QuizSubmission" },
+      "description": "User solved quiz history"
+    },
+    "/users/{userId}/activity_logs/{logId}": {
+      "schema": { "$ref": "#/entities/ActivityLog" },
+      "description": "User activity timeline"
+    },
+    "/users/{userId}/chat_messages/{messageId}": {
+      "schema": { "$ref": "#/entities/ChatMessage" },
+      "description": "AI Tutor chat history"
+    }
+  }
+}

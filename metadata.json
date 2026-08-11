@@ -1,0 +1,6 @@
+{
+  "name": "PulseNews Platform",
+  "description": "AI-powered Current Affairs & Knowledge Intelligence Platform collecting real-time news, video live streams, structured digests, interactive quizzes, mindmaps, and AI tutoring.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
