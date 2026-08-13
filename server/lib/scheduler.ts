@@ -1,4 +1,5 @@
 import { Server as SocketServer } from 'socket.io';
+import { runIngestionPipeline, logIngestionRun } from './rssIngestionEngine.js';
 
 type ScheduledTask = () => Promise<void>;
 
@@ -65,6 +66,45 @@ export function registerStreamBroadcaster(io: SocketServer): void {
         streams,
         timestamp: new Date().toISOString(),
       });
+    },
+  });
+}
+
+export function registerRssIngestion(io: SocketServer): void {
+  const INGESTION_INTERVAL_MS = 30 * 60 * 1000;
+
+  registerTask({
+    name: 'rss-ingestion-pipeline',
+    intervalMs: INGESTION_INTERVAL_MS,
+    runOnStart: false,
+    task: async () => {
+      const startTime = Date.now();
+      console.log('[scheduler] Starting scheduled RSS ingestion...');
+
+      try {
+        const result = await runIngestionPipeline();
+        const duration = Date.now() - startTime;
+
+        await logIngestionRun('scheduled', result, duration);
+
+        if (result.articlesNew > 0) {
+          io.emit('news_update', {
+            action: 'RSS_INGESTION_COMPLETE',
+            articlesNew: result.articlesNew,
+            aiEnriched: result.aiEnriched,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        console.log(`[scheduler] RSS ingestion complete: ${result.articlesNew} new articles in ${duration}ms`);
+      } catch (err: any) {
+        const duration = Date.now() - startTime;
+        await logIngestionRun('scheduled', {
+          feedsPolled: 0, articlesFetched: 0, articlesNew: 0,
+          articlesDuplicate: 0, aiEnriched: 0, aiFailed: 0, newArticleIds: [],
+        }, duration, err.message);
+        console.error('[scheduler] RSS ingestion failed:', err.message);
+      }
     },
   });
 }

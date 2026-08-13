@@ -36,7 +36,8 @@ import {
   logAIUsage as dbLogAIUsage,
   fetchSystemMetrics,
 } from "./server/lib/supabaseDataService.js";
-import { startScheduler, registerStreamBroadcaster, stopScheduler } from "./server/lib/scheduler.js";
+import { startScheduler, registerStreamBroadcaster, registerRssIngestion, stopScheduler } from "./server/lib/scheduler.js";
+import { runIngestionPipeline, logIngestionRun, getRecentIngestionRuns } from "./server/lib/rssIngestionEngine.js";
 
 dotenv.config();
 
@@ -88,6 +89,7 @@ io.on("connection", (socket) => {
 
 // Register scheduled background tasks
 registerStreamBroadcaster(io);
+registerRssIngestion(io);
 startScheduler();
 
 // Initialize Gemini Client server-side
@@ -700,127 +702,43 @@ app.get("/api/article/:id", async (req, res) => {
   res.json(item);
 });
 
-// POST /api/worker/poll - Ingestion Worker triggered by scheduled job / cron or manual call
+// POST /api/worker/poll - Real RSS ingestion: fetches live feeds, deduplicates, AI-enriches, persists to Supabase
 app.post("/api/worker/poll", async (req, res) => {
+  const startTime = Date.now();
   try {
-    const { auto_review, raw_feed_url } = req.body;
-    const ai = getGeminiClient();
+    const { auto_review, max_new } = req.body;
 
-    const sampleFeedHeadlines = [
-      "RBI Announces New Digital Currency Framework For Interbank Settlements",
-      "ISRO Conducts Successful Hot-Test Of Heavy-Lift Semi-Cryogenic Engine",
-      "Global Climate Summit In Nairobi Yields Binding Carbon-Credit Protocols",
-      "Semicon India Initiative Grants $1.2B For Native Fabrication Unit In Gujarat"
-    ];
-
-    const randomFeedItem = sampleFeedHeadlines[Math.floor(Math.random() * sampleFeedHeadlines.length)];
-
-    const promptText = `Process this newly ingested RSS news item into a structured Knowledge Object for competitive exam preparation:
-Source Item: "${randomFeedItem}"
-
-Produce JSON matching this exact schema:
-{
-  "headline": string,
-  "summary": string (3-4 lines exam-oriented overview),
-  "category": one of ["Economy", "Science", "Environment", "Polity", "International"],
-  "entities": array of strings,
-  "exam_importance": integer 1-100,
-  "quick_take": array of 3 bullet point strings,
-  "mcqs": [
-    {
-      "question": string,
-      "options": [string, string, string, string],
-      "correct_index": integer (0 to 3),
-      "explanation": string
-    }
-  ]
-}`;
-
-    const response = await ai.models.generateContent({
-      model: "gemini-3.6-flash",
-      contents: promptText,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            headline: { type: Type.STRING },
-            summary: { type: Type.STRING },
-            category: { type: Type.STRING },
-            entities: { type: Type.ARRAY, items: { type: Type.STRING } },
-            exam_importance: { type: Type.INTEGER },
-            quick_take: { type: Type.ARRAY, items: { type: Type.STRING } },
-            mcqs: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  question: { type: Type.STRING },
-                  options: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  correct_index: { type: Type.INTEGER },
-                  explanation: { type: Type.STRING }
-                },
-                required: ["question", "options", "correct_index", "explanation"]
-              }
-            }
-          },
-          required: ["headline", "summary", "category", "exam_importance", "quick_take", "mcqs"]
-        }
-      }
+    const result = await runIngestionPipeline(undefined, {
+      autoReview: auto_review === true,
+      maxNew: max_new || 15,
     });
 
-    const parsed = JSON.parse(response.text || "{}");
-    const newId = `ko-${Date.now()}`;
+    const duration = Date.now() - startTime;
+    await logIngestionRun('worker_poll', result, duration);
 
-    const newKnowledgeObject = {
-      id: newId,
-      source_url: raw_feed_url || `https://news.official.gov/article-${Date.now()}`,
-      source_name: "Official PIB / RSS Feed",
-      published_at: new Date().toISOString(),
-      headline: parsed.headline || randomFeedItem,
-      summary: parsed.summary || "Newly ingested current affairs item distilled by Gemini 3.6 Flash pipeline.",
-      category: parsed.category || "Economy",
-      entities: parsed.entities || ["Government", "Policy"],
-      exam_importance: parsed.exam_importance || 90,
-      reviewed: auto_review ? true : false, // QC gate
-      monetized: false,
-      tag: "#INGESTED",
-      views: "1.2K",
-      likes: 120,
-      comments_count: 14,
-      shares: 25,
-      image_url: "https://images.unsplash.com/photo-1504711434969-e33886168f5c?w=1000&auto=format&fit=crop&q=80",
-      quick_take: parsed.quick_take || [
-        "Ingested via scheduled RSS worker thread.",
-        "Deduplicated by SHA256 URL hash.",
-        "Awaiting human QC review before publishing to feed."
-      ],
-      mcqs: (parsed.mcqs || []).map((m: any, idx: number) => ({
-        id: `mcq-${newId}-${idx}`,
-        ...m
-      }))
-    };
-
-    KNOWLEDGE_OBJECTS_STORE.unshift(newKnowledgeObject);
-
-    if (newKnowledgeObject.reviewed) {
-      // Broadcast real-time news_update event if article is published
+    if (result.articlesNew > 0) {
       io.emit("news_update", {
-        action: "NEW_ARTICLE_INGESTED",
-        article: newKnowledgeObject,
-        timestamp: new Date().toISOString()
+        action: "RSS_INGESTION_COMPLETE",
+        articlesNew: result.articlesNew,
+        aiEnriched: result.aiEnriched,
+        timestamp: new Date().toISOString(),
       });
     }
 
     res.json({
       success: true,
-      message: auto_review ? "Item ingested and published to feed" : "Item ingested into unreviewed QC gate queue",
-      item: newKnowledgeObject,
-      total_store_count: KNOWLEDGE_OBJECTS_STORE.length
+      message: `Ingested ${result.articlesNew} new articles (${result.aiEnriched} AI-enriched) from ${result.feedsPolled} feeds`,
+      result,
+      duration_ms: duration,
     });
   } catch (err: any) {
+    const duration = Date.now() - startTime;
     console.error("Worker Poll Error:", err);
-    res.status(500).json({ error: "Failed to execute worker ingestion pipeline", details: err.message });
+    await logIngestionRun('worker_poll', {
+      feedsPolled: 0, articlesFetched: 0, articlesNew: 0,
+      articlesDuplicate: 0, aiEnriched: 0, aiFailed: 0, newArticleIds: [],
+    }, duration, err.message);
+    res.status(500).json({ error: "Failed to execute RSS ingestion pipeline", details: err.message });
   }
 });
 
@@ -991,14 +909,45 @@ app.get("/api/knowledge-graph", (_req, res) => {
   });
 });
 
-// GET /api/ingest/poll - Real-time polling endpoint simulating continuous Celery Beat RSS ingestion worker
-app.get("/api/ingest/poll", (_req, res) => {
-  res.json({
-    success: true,
-    latest_count: KNOWLEDGE_OBJECTS_STORE.length,
-    last_polled_at: new Date().toISOString(),
-    items: KNOWLEDGE_OBJECTS_STORE
-  });
+// GET /api/ingest/poll - Returns latest articles from database (real data, not in-memory store)
+app.get("/api/ingest/poll", async (_req, res) => {
+  try {
+    const digest = await fetchTodayDigest(20);
+    res.json({
+      success: true,
+      latest_count: digest.length,
+      last_polled_at: new Date().toISOString(),
+      items: digest,
+    });
+  } catch (err: any) {
+    res.json({
+      success: true,
+      latest_count: 0,
+      last_polled_at: new Date().toISOString(),
+      items: [],
+    });
+  }
+});
+
+// GET /api/ingest/status - Pipeline monitoring: recent ingestion runs with stats
+app.get("/api/ingest/status", async (_req, res) => {
+  try {
+    const runs = await getRecentIngestionRuns(10);
+    const unreviewedCount = await fetchUnreviewedCount();
+    res.json({
+      success: true,
+      recent_runs: runs,
+      unreviewed_count: unreviewedCount,
+      total_runs: runs.length,
+    });
+  } catch (err: any) {
+    res.json({
+      success: true,
+      recent_runs: [],
+      unreviewed_count: 0,
+      total_runs: 0,
+    });
+  }
 });
 
 
