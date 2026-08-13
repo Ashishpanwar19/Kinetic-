@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { TabType, KnowledgeObject, LiveStreamItem } from './types';
-import { INITIAL_KNOWLEDGE_OBJECTS } from './data/mockData';
 import { Navigation } from './components/Navigation';
 import { FeedView } from './components/FeedView';
 import { DiscoverView } from './components/DiscoverView';
@@ -17,11 +16,12 @@ import { OpenNewsStudioView } from './components/OpenNewsStudioView';
 import { RssNewsTicker } from './components/RssNewsTicker';
 import { AuthProvider } from './context/AuthContext';
 import { useSocket, NewsUpdatePayload } from './hooks/useSocket';
-import { syncNewsDataToState } from './services/newsDataService';
+import { api } from './services/api';
 
 function MainContent() {
   const [currentTab, setCurrentTab] = useState<TabType>('feed');
-  const [knowledgeObjects, setKnowledgeObjects] = useState<KnowledgeObject[]>(INITIAL_KNOWLEDGE_OBJECTS);
+  const [knowledgeObjects, setKnowledgeObjects] = useState<KnowledgeObject[]>([]);
+  const [isLoadingFeed, setIsLoadingFeed] = useState(true);
   const [selectedItem, setSelectedItem] = useState<KnowledgeObject | null>(null);
   const [activeQuizItem, setActiveQuizItem] = useState<KnowledgeObject | null>(null);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
@@ -68,25 +68,25 @@ function MainContent() {
 
   // Fetch initial profile & today's digest from server on mount
   useEffect(() => {
-    fetch('/api/digest/today')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.knowledge_objects && data.knowledge_objects.length > 0) {
+    let cancelled = false;
+
+    (async () => {
+      try {
+        const data = await api.fetchTodayDigest();
+        if (!cancelled && data.knowledge_objects && data.knowledge_objects.length > 0) {
           setKnowledgeObjects(data.knowledge_objects);
         }
-      })
-      .catch((err) => {
-        console.log('Using local client state for Knowledge Objects', err);
-      });
+      } catch (err) {
+        console.warn('Could not fetch digest from server:', err);
+      } finally {
+        if (!cancelled) setIsLoadingFeed(false);
+      }
+    })();
 
-    // Auto-sync real NewsData.io sports & world news into knowledge objects state
-    syncNewsDataToState(setKnowledgeObjects, { query: 'sports' }).catch(console.warn);
-    syncNewsDataToState(setKnowledgeObjects, { query: 'international' }).catch(console.warn);
-
-    fetch('/api/user/profile')
-      .then((res) => res.json())
-      .then((data) => {
-        if (data.success && data.user) {
+    (async () => {
+      try {
+        const data = await api.fetchProfile();
+        if (!cancelled && data.success && data.user) {
           setUserStats({
             quizzes_solved: data.user.quizzes_solved,
             accuracy: data.user.accuracy,
@@ -94,16 +94,17 @@ function MainContent() {
             history: data.user.history,
           });
         }
-      })
-      .catch((err) => {
-        console.log('Could not fetch initial user profile:', err);
-      });
+      } catch (err) {
+        console.warn('Could not fetch initial user profile:', err);
+      }
+    })();
+
+    return () => { cancelled = true; };
   }, []);
 
   const refreshUserProfile = async () => {
     try {
-      const res = await fetch('/api/user/profile');
-      const data = await res.json();
+      const data = await api.fetchProfile();
       if (data.success && data.user) {
         setUserStats({
           quizzes_solved: data.user.quizzes_solved,
@@ -135,11 +136,7 @@ function MainContent() {
     }
 
     try {
-      await fetch('/api/user/bookmark', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ article_id: id, is_saved: updatedIsSaved }),
-      });
+      await api.toggleBookmark(id);
       refreshUserProfile();
     } catch (err) {
       console.error('Failed to update bookmark on backend store:', err);
@@ -327,6 +324,7 @@ function MainContent() {
         {currentTab === 'feed' && (
           <FeedView
             items={knowledgeObjects}
+            isLoading={isLoadingFeed}
             onSelectItem={handleSelectItem}
             onToggleSave={handleToggleSave}
             onToggleLike={handleToggleLike}

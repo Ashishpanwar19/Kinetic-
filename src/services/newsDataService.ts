@@ -11,9 +11,12 @@ export interface NewsDataFetchOptions {
  * NewsData.io Service
  * Integrates real-time NewsData.io API feeds for sports, world, and breaking news,
  * mapping them into the application's KnowledgeObject state.
+ *
+ * The API key is stored server-side and never exposed in client code.
+ * Direct client-side fetches require the user to provide their own key via the UI.
  */
 
-export const DEFAULT_NEWSDATA_API_KEY = 'pub_6543210fedcba';
+export const DEFAULT_NEWSDATA_API_KEY = '';
 
 /**
  * Fetch real-time news articles from the server endpoint /api/news/fetch-newsdata
@@ -54,6 +57,9 @@ export async function fetchNewsFromApi(options: NewsDataFetchOptions = {}): Prom
  * Direct client-side fetch helper for NewsData.io API (with automatic fallback handling)
  */
 export async function fetchDirectNewsData(apiKey: string, query: string = 'sports'): Promise<KnowledgeObject[]> {
+  if (!apiKey) {
+    return fetchNewsFromApi({ query });
+  }
   const url = `https://newsdata.io/api/1/latest?apikey=${encodeURIComponent(apiKey)}&q=${encodeURIComponent(query)}&language=en`;
   try {
     const res = await fetch(url);

@@ -4,6 +4,7 @@ import { VideoPlayer } from './VideoPlayer';
 
 interface FeedViewProps {
   items: KnowledgeObject[];
+  isLoading?: boolean;
   onSelectItem: (item: KnowledgeObject) => void;
   onToggleSave: (id: string, e: React.MouseEvent) => void;
   onToggleLike: (id: string, e: React.MouseEvent) => void;
@@ -12,6 +13,7 @@ interface FeedViewProps {
 
 export const FeedView: React.FC<FeedViewProps> = ({
   items,
+  isLoading = false,
   onSelectItem,
   onToggleSave,
   onToggleLike,
@@ -152,7 +154,13 @@ export const FeedView: React.FC<FeedViewProps> = ({
         ref={containerRef}
         className="flex-1 overflow-y-scroll snap-y snap-mandatory hide-scrollbar"
       >
-        {filteredItems.length === 0 ? (
+        {isLoading ? (
+          <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#121127]">
+            <div className="w-12 h-12 border-3 border-[#00D1FF]/30 border-t-[#00D1FF] rounded-full animate-spin mb-4"></div>
+            <h3 className="text-lg font-sora font-bold text-white mb-1">Loading Feed</h3>
+            <p className="text-sm text-[#bbc9cf]">Fetching today's latest news reels...</p>
+          </div>
+        ) : filteredItems.length === 0 ? (
           <div className="w-full h-full flex flex-col items-center justify-center p-6 text-center bg-[#121127]">
             <span className="material-symbols-outlined text-5xl text-[#00D1FF] mb-3 animate-bounce">location_on</span>
             <h3 className="text-xl font-sora font-bold text-white mb-2">No {activeFilter} Stories Right Now</h3>

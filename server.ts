@@ -18,6 +18,25 @@ import {
   OPEN_NEWS_COUNTRIES,
   dedupeArticles
 } from "./server/openNewsEngine.js";
+import { requestLogger, logAIUsage } from "./server/lib/logger.js";
+import { apiRateLimit, aiRateLimit } from "./server/lib/rateLimiter.js";
+import { optionalAuth, requireAuth, type AuthenticatedRequest } from "./server/lib/authMiddleware.js";
+import { isSupabaseConfigured } from "./server/lib/supabaseClient.js";
+import {
+  fetchTodayDigest,
+  fetchKnowledgeObjectById,
+  fetchUnreviewedCount,
+  approveKnowledgeObject,
+  submitQuiz as dbSubmitQuiz,
+  toggleBookmark as dbToggleBookmark,
+  fetchUserBookmarks as dbFetchBookmarks,
+  fetchUserProfile as dbFetchProfile,
+  updateUserStats as dbUpdateUserStats,
+  logArticleView,
+  logAIUsage as dbLogAIUsage,
+  fetchSystemMetrics,
+} from "./server/lib/supabaseDataService.js";
+import { startScheduler, registerStreamBroadcaster, stopScheduler } from "./server/lib/scheduler.js";
 
 dotenv.config();
 
@@ -28,6 +47,8 @@ const app = express();
 const PORT = 3000;
 
 app.use(express.json());
+app.use(requestLogger);
+app.use("/api", apiRateLimit);
 
 const httpServer = http.createServer(app);
 const io = new SocketIOServer(httpServer, {
@@ -65,19 +86,9 @@ io.on("connection", (socket) => {
   });
 });
 
-// Background simulation ticker for real-time live stream viewer counts
-setInterval(() => {
-  const live1Viewers = (280 + (Math.random() * 10 - 5)).toFixed(1) + "K";
-  const live2Viewers = (140 + (Math.random() * 8 - 4)).toFixed(1) + "K";
-  
-  io.emit("stream_status", {
-    type: "REALTIME_UPDATE",
-    streams: [
-      { id: "live-1", is_live: true, viewers: live1Viewers },
-      { id: "live-2", is_live: true, viewers: live2Viewers }
-    ]
-  });
-}, 10000);
+// Register scheduled background tasks
+registerStreamBroadcaster(io);
+startScheduler();
 
 // Initialize Gemini Client server-side
 const getGeminiClient = () => {
@@ -520,7 +531,22 @@ app.get("/api/health", (_req, res) => {
 });
 
 // GET /api/digest/today - Returns reviewed published knowledge objects
-app.get("/api/digest/today", (_req, res) => {
+app.get("/api/digest/today", async (_req, res) => {
+  try {
+    if (isSupabaseConfigured()) {
+      const kos = await fetchTodayDigest(50);
+      if (kos.length > 0) {
+        res.json({
+          date: new Date().toISOString().split("T")[0],
+          count: kos.length,
+          knowledge_objects: kos,
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[digest/today] Supabase fetch failed, falling back to in-memory:", err);
+  }
   const published = KNOWLEDGE_OBJECTS_STORE.filter((k) => k.reviewed !== false);
   res.json({
     date: new Date().toISOString().split("T")[0],
@@ -530,7 +556,22 @@ app.get("/api/digest/today", (_req, res) => {
 });
 
 // GET /api/digest/unreviewed - Human QC Review Gate queue
-app.get("/api/digest/unreviewed", (_req, res) => {
+app.get("/api/digest/unreviewed", async (_req, res) => {
+  try {
+    if (isSupabaseConfigured()) {
+      const count = await fetchUnreviewedCount();
+      if (count > 0) {
+        res.json({
+          success: true,
+          count,
+          unreviewed_items: [],
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[digest/unreviewed] Supabase fetch failed, falling back:", err);
+  }
   const unreviewed = KNOWLEDGE_OBJECTS_STORE.filter((k) => k.reviewed === false);
   res.json({
     success: true,
@@ -540,21 +581,38 @@ app.get("/api/digest/unreviewed", (_req, res) => {
 });
 
 // POST /api/article/:id/review - Human QC Approval Gate
-app.post("/api/article/:id/review", (req, res) => {
+app.post("/api/article/:id/review", async (req, res) => {
+  try {
+    if (isSupabaseConfigured()) {
+      const approved = await approveKnowledgeObject(req.params.id);
+      if (approved) {
+        io.emit("news_update", {
+          action: "ARTICLE_APPROVED",
+          article: approved,
+          timestamp: new Date().toISOString()
+        });
+        res.json({
+          success: true,
+          message: "Article approved and published to public feed",
+          article: approved,
+        });
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[article/review] Supabase update failed, falling back:", err);
+  }
   const item = KNOWLEDGE_OBJECTS_STORE.find((k) => k.id === req.params.id);
   if (!item) {
     res.status(404).json({ error: "Article not found" });
     return;
   }
   item.reviewed = true;
-
-  // Emit real-time news_update event to all connected socket clients
   io.emit("news_update", {
     action: "ARTICLE_APPROVED",
     article: item,
     timestamp: new Date().toISOString()
   });
-
   res.json({
     success: true,
     message: "Article approved and published to public feed",
@@ -622,7 +680,18 @@ app.get("/api/pdf/:date/download", (req, res) => {
 });
 
 // GET /api/article/:id
-app.get("/api/article/:id", (req, res) => {
+app.get("/api/article/:id", async (req, res) => {
+  try {
+    if (isSupabaseConfigured()) {
+      const ko = await fetchKnowledgeObjectById(req.params.id);
+      if (ko) {
+        res.json(ko);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[article/:id] Supabase fetch failed, falling back:", err);
+  }
   const item = KNOWLEDGE_OBJECTS_STORE.find((k) => k.id === req.params.id);
   if (!item) {
     res.status(404).json({ error: "Article not found" });
@@ -756,7 +825,18 @@ Produce JSON matching this exact schema:
 });
 
 // GET /api/user/profile - Retrieves user profile, quizzes solved, accuracy & saved items
-app.get("/api/user/profile", (_req, res) => {
+app.get("/api/user/profile", optionalAuth, async (req: AuthenticatedRequest, res) => {
+  try {
+    if (isSupabaseConfigured() && req.userId) {
+      const profile = await dbFetchProfile(req.userId);
+      if (profile) {
+        res.json({ success: true, user: profile });
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[user/profile] Supabase fetch failed, falling back:", err);
+  }
   res.json({
     success: true,
     user: userStore.getProfile(),
@@ -764,11 +844,20 @@ app.get("/api/user/profile", (_req, res) => {
 });
 
 // POST /api/user/bookmark - Toggles bookmark on article and updates user profile
-app.post("/api/user/bookmark", (req, res) => {
+app.post("/api/user/bookmark", optionalAuth, async (req: AuthenticatedRequest, res) => {
   const { article_id, headline } = req.body;
   if (!article_id) {
     res.status(400).json({ error: "Missing article_id" });
     return;
+  }
+  try {
+    if (isSupabaseConfigured() && req.userId) {
+      const result = await dbToggleBookmark(req.userId, article_id);
+      res.json({ success: true, is_saved: result.is_saved });
+      return;
+    }
+  } catch (err) {
+    console.warn("[user/bookmark] Supabase toggle failed, falling back:", err);
   }
   const result = userStore.toggleBookmark(article_id, headline);
   res.json({
@@ -800,10 +889,23 @@ app.post("/api/user/reset", (_req, res) => {
 });
 
 // POST /api/quiz/submit
-app.post("/api/quiz/submit", (req, res) => {
+app.post("/api/quiz/submit", optionalAuth, async (req: AuthenticatedRequest, res) => {
   const { article_id, answers } = req.body;
+
+  try {
+    if (isSupabaseConfigured() && req.userId) {
+      const result = await dbSubmitQuiz(req.userId, article_id, answers || []);
+      if (result) {
+        await dbUpdateUserStats(req.userId);
+        res.json(result);
+        return;
+      }
+    }
+  } catch (err) {
+    console.warn("[quiz/submit] Supabase submit failed, falling back:", err);
+  }
+
   const article = KNOWLEDGE_OBJECTS_STORE.find((k) => k.id === article_id);
-  
   if (!article || !article.mcqs) {
     res.status(400).json({ error: "Invalid article ID or no quiz found" });
     return;
@@ -825,9 +927,7 @@ app.post("/api/quiz/submit", (req, res) => {
     };
   });
 
-  // Record quiz completion directly into user database
   const updatedUser = userStore.recordQuizResult(article.headline, score, total);
-
   res.json({
     article_id,
     score,
@@ -839,22 +939,28 @@ app.post("/api/quiz/submit", (req, res) => {
 });
 
 // GET /api/system/metrics - Real-time distributed microservices architecture metrics
-app.get("/api/system/metrics", (_req, res) => {
-  res.json({
-    success: true,
-    metrics: {
-      rssWorkerStatus: "HEALTHY",
-      activePollers: 14,
-      celeryQueueDepth: 3,
-      articlesProcessed24h: 1840,
-      breakingNewsDetected: 12,
-      ragEmbeddingsIndexed: 4520,
-      neo4jNodesCount: 890,
-      factVerificationRate: 99.4,
-      systemUptime: "99.99%",
-      processingLatencyMs: 142
-    }
-  });
+app.get("/api/system/metrics", async (_req, res) => {
+  try {
+    const metrics = await fetchSystemMetrics();
+    res.json({ success: true, metrics });
+  } catch (err) {
+    console.warn("[system/metrics] Supabase fetch failed, falling back:", err);
+    res.json({
+      success: true,
+      metrics: {
+        rssWorkerStatus: "HEALTHY",
+        activePollers: 14,
+        celeryQueueDepth: 3,
+        articlesProcessed24h: 1840,
+        breakingNewsDetected: 12,
+        ragEmbeddingsIndexed: 4520,
+        neo4jNodesCount: 890,
+        factVerificationRate: 99.4,
+        systemUptime: "99.99%",
+        processingLatencyMs: 142
+      }
+    });
+  }
 });
 
 // GET /api/knowledge-graph - Neo4j Knowledge Graph nodes & relationships endpoint
@@ -897,7 +1003,7 @@ app.get("/api/ingest/poll", (_req, res) => {
 
 
 // POST /api/ai/chat - Multi-turn conversational Gemini Chatbot for Exam Prep & News Analysis
-app.post("/api/ai/chat", async (req, res) => {
+app.post("/api/ai/chat", aiRateLimit, async (req, res) => {
   try {
     const { messages } = req.body;
     if (!messages || !Array.isArray(messages) || messages.length === 0) {
@@ -939,7 +1045,7 @@ app.post("/api/ai/chat", async (req, res) => {
 
 // POST /api/ai/quick-take
 // Generates Quick Take summaries, exam importance ratings, and MCQs for any topic or news text using Gemini 3.6 Flash
-app.post("/api/ai/quick-take", async (req, res) => {
+app.post("/api/ai/quick-take", aiRateLimit, async (req, res) => {
   try {
     const { topic, raw_text } = req.body;
     if (!topic && !raw_text) {
@@ -1601,7 +1707,24 @@ async function startServer() {
 
   httpServer.listen(PORT, "0.0.0.0", () => {
     console.log(`Kinetic server with Socket.io running at http://0.0.0.0:${PORT}`);
+    if (isSupabaseConfigured()) {
+      console.log("[supabase] Database integration active");
+    } else {
+      console.warn("[supabase] Not configured — using in-memory fallback storage");
+    }
   });
 }
+
+process.on("SIGTERM", () => {
+  console.log("[server] SIGTERM received, shutting down gracefully");
+  stopScheduler();
+  httpServer.close(() => process.exit(0));
+});
+
+process.on("SIGINT", () => {
+  console.log("[server] SIGINT received, shutting down gracefully");
+  stopScheduler();
+  httpServer.close(() => process.exit(0));
+});
 
 startServer();
