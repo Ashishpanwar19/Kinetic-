@@ -62,7 +62,25 @@ export interface UnreviewedResponse {
 
 export interface KnowledgeGraphData {
   nodes: Array<{ id: string; label: string; type: string; val: number }>;
-  links: Array<{ source: string; target: string; relationship: string }>;
+  links: Array<{ source: string; target: string; relationship: string; weight?: number }>;
+}
+
+export interface TimelineEvent {
+  id: string;
+  topic: string;
+  event_date: string;
+  event_title: string;
+  event_description: string;
+}
+
+export interface FactCheckData {
+  id: string;
+  ko_id: string;
+  verification_status: string;
+  confidence_score: number;
+  cross_source_count: number;
+  conflicting_sources: string[];
+  verification_notes: string;
 }
 
 export const api = {
@@ -98,7 +116,32 @@ export const api = {
 
   fetchMetrics: () => apiFetch<{ success: boolean; metrics: SystemMetrics }>('/api/system/metrics'),
 
-  fetchKnowledgeGraph: () => apiFetch<KnowledgeGraphData>('/api/knowledge-graph'),
+  fetchKnowledgeGraph: (limit?: number) =>
+    apiFetch<{ success: boolean; nodes: KnowledgeGraphData['nodes']; links: KnowledgeGraphData['links'] }>(
+      `/api/knowledge-graph${limit ? `?limit=${limit}` : ''}`
+    ),
+
+  fetchTimelineTopics: () =>
+    apiFetch<{ success: boolean; topics: string[] }>('/api/knowledge/timeline'),
+
+  fetchTimeline: (topic: string) =>
+    apiFetch<{ success: boolean; topic: string; events: TimelineEvent[] }>(
+      `/api/knowledge/timeline?topic=${encodeURIComponent(topic)}`
+    ),
+
+  fetchFactCheck: (koId: string) =>
+    apiFetch<{ success: boolean; fact_check: FactCheckData | null }>(
+      `/api/knowledge/fact-check/${koId}`
+    ),
+
+  fetchDuplicateGroups: () =>
+    apiFetch<{ success: boolean; groups: any[] }>('/api/knowledge/duplicates'),
+
+  triggerKnowledgeEngine: (maxArticles?: number) =>
+    apiFetch<{ success: boolean; result: any; duration_ms: number }>(
+      '/api/knowledge/process',
+      { method: 'POST', body: JSON.stringify({ max_articles: maxArticles || 10 }) }
+    ),
 
   aiChat: (messages: Array<{ role: string; content: string }>, context?: string) =>
     apiFetch<{ success: boolean; reply: string }>('/api/ai/chat', {

@@ -36,8 +36,16 @@ import {
   logAIUsage as dbLogAIUsage,
   fetchSystemMetrics,
 } from "./server/lib/supabaseDataService.js";
-import { startScheduler, registerStreamBroadcaster, registerRssIngestion, stopScheduler } from "./server/lib/scheduler.js";
+import { startScheduler, registerStreamBroadcaster, registerRssIngestion, registerKnowledgeEngine, stopScheduler } from "./server/lib/scheduler.js";
 import { runIngestionPipeline, logIngestionRun, getRecentIngestionRuns } from "./server/lib/rssIngestionEngine.js";
+import {
+  runKnowledgeEnginePipeline,
+  fetchKnowledgeGraphData,
+  fetchTimeline,
+  fetchFactCheck,
+  fetchDuplicateGroups,
+  fetchTimelineTopics,
+} from "./server/lib/aiKnowledgeEngine.js";
 
 dotenv.config();
 
@@ -90,6 +98,7 @@ io.on("connection", (socket) => {
 // Register scheduled background tasks
 registerStreamBroadcaster(io);
 registerRssIngestion(io);
+registerKnowledgeEngine(io);
 startScheduler();
 
 // Initialize Gemini Client server-side
@@ -881,32 +890,88 @@ app.get("/api/system/metrics", async (_req, res) => {
   }
 });
 
-// GET /api/knowledge-graph - Neo4j Knowledge Graph nodes & relationships endpoint
-app.get("/api/knowledge-graph", (_req, res) => {
-  res.json({
-    success: true,
-    nodes: [
-      { id: "rbi", label: "Reserve Bank of India", type: "Organization", val: 24, details: "Central Banking Institution regulating monetary policy." },
-      { id: "mpc", label: "Monetary Policy Committee", type: "Policy", val: 18, details: "Formulates benchmark repo rate decisions." },
-      { id: "repo", label: "Repo Rate (6.50%)", type: "Policy", val: 20, details: "Current benchmark lending rate maintained by RBI." },
-      { id: "inflation", label: "CPI Inflation Target (4%)", type: "Policy", val: 16, details: "Retail inflation targeting band for economic stability." },
-      { id: "isro", label: "ISRO Space Agency", type: "Organization", val: 22, details: "India's primary space exploration agency." },
-      { id: "gaganyaan", label: "Gaganyaan Mission", type: "Scheme", val: 20, details: "Human Spaceflight Programme aiming to demonstrate crewed capability." },
-      { id: "lvm3", label: "LVM3 Launch Vehicle", type: "Scheme", val: 14, details: "Heavy-lift launch vehicle deployed for crewed orbital insertion." },
-      { id: "un", label: "United Nations", type: "Organization", val: 25, details: "International body convening global cyber-sovereignty talks." },
-      { id: "geneva_summit", label: "Geneva Cyber Summit", type: "Event", val: 19, details: "Global summit setting rules for sovereign data boundaries." },
-      { id: "semicon_india", label: "Semicon India Policy", type: "Scheme", val: 18, details: "National initiative for domestic semiconductor manufacturing." }
-    ],
-    links: [
-      { source: "rbi", target: "mpc", relationship: "CONVENES" },
-      { source: "mpc", target: "repo", relationship: "DETERMINES" },
-      { source: "repo", target: "inflation", relationship: "CONTROLS" },
-      { source: "isro", target: "gaganyaan", relationship: "OPERATES" },
-      { source: "gaganyaan", target: "lvm3", relationship: "UTILIZES" },
-      { source: "un", target: "geneva_summit", relationship: "HOSTS" },
-      { source: "rbi", target: "semicon_india", relationship: "FINANCES" }
-    ]
-  });
+// GET /api/knowledge-graph - Real knowledge graph data from entity_nodes + entity_relations
+app.get("/api/knowledge-graph", async (req, res) => {
+  try {
+    const limit = parseInt(req.query.limit as string) || 50;
+    const graph = await fetchKnowledgeGraphData(limit);
+    res.json({
+      success: true,
+      nodes: graph.nodes,
+      links: graph.links,
+    });
+  } catch (err: any) {
+    res.json({
+      success: true,
+      nodes: [],
+      links: [],
+    });
+  }
+});
+
+// GET /api/knowledge/timeline - Fetch timeline for a topic, or list all topics if no topic param
+app.get("/api/knowledge/timeline", async (req, res) => {
+  try {
+    const topic = (req.query.topic as string) || "";
+    if (!topic) {
+      const topics = await fetchTimelineTopics();
+      res.json({ success: true, topics });
+      return;
+    }
+    const events = await fetchTimeline(topic);
+    res.json({ success: true, topic, events });
+  } catch (err: any) {
+    res.json({ success: true, topic: req.query.topic || "", events: [] });
+  }
+});
+
+// GET /api/knowledge/fact-check/:koId - Fetch fact-check result for an article
+app.get("/api/knowledge/fact-check/:koId", async (req, res) => {
+  try {
+    const factCheck = await fetchFactCheck(req.params.koId);
+    res.json({ success: true, fact_check: factCheck });
+  } catch (err: any) {
+    res.json({ success: true, fact_check: null });
+  }
+});
+
+// GET /api/knowledge/duplicates - Fetch detected duplicate article groups
+app.get("/api/knowledge/duplicates", async (_req, res) => {
+  try {
+    const groups = await fetchDuplicateGroups(20);
+    res.json({ success: true, groups });
+  } catch (err: any) {
+    res.json({ success: true, groups: [] });
+  }
+});
+
+// POST /api/knowledge/process - Manually trigger the AI knowledge engine pipeline
+app.post("/api/knowledge/process", async (req, res) => {
+  const startTime = Date.now();
+  try {
+    const { max_articles, skip_fact_check } = req.body;
+    const result = await runKnowledgeEnginePipeline({
+      maxArticles: max_articles || 10,
+      skipFactCheck: skip_fact_check === true,
+    });
+    const duration = Date.now() - startTime;
+
+    if (result.breakingNewsDetected > 0) {
+      io.emit("breaking_news", {
+        count: result.breakingNewsDetected,
+        timestamp: new Date().toISOString(),
+      });
+    }
+
+    res.json({
+      success: true,
+      message: `Processed ${result.articlesProcessed} articles: ${result.entitiesExtracted} entities, ${result.relationshipsBuilt} relationships, ${result.factChecksRun} fact-checks, ${result.timelinesBuilt} timelines`,
+      result,
+      duration_ms: duration,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: "Failed to run knowledge engine pipeline", details: err.message });
+  }
 });
 
 // GET /api/ingest/poll - Returns latest articles from database (real data, not in-memory store)

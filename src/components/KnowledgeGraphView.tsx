@@ -1,27 +1,55 @@
 import React, { useState, useEffect } from 'react';
 import { GraphNode, GraphLink } from '../types';
+import { api, TimelineEvent } from '../services/api';
 
 export const KnowledgeGraphView: React.FC = () => {
   const [nodes, setNodes] = useState<GraphNode[]>([]);
   const [links, setLinks] = useState<GraphLink[]>([]);
   const [selectedNode, setSelectedNode] = useState<GraphNode | null>(null);
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [timelineTopics, setTimelineTopics] = useState<string[]>([]);
+  const [selectedTimelineTopic, setSelectedTimelineTopic] = useState<string | null>(null);
+  const [timelineEvents, setTimelineEvents] = useState<TimelineEvent[]>([]);
+  const [isLoadingTimeline, setIsLoadingTimeline] = useState<boolean>(false);
 
   useEffect(() => {
-    fetch('/api/knowledge-graph')
-      .then((res) => res.json())
-      .then((data) => {
+    Promise.all([
+      fetch('/api/knowledge-graph')
+        .then((res) => res.json())
+        .then((data) => {
+          if (data.success) {
+            setNodes(data.nodes || []);
+            setLinks(data.links || []);
+            if (data.nodes && data.nodes.length > 0) {
+              setSelectedNode(data.nodes[0]);
+            }
+          }
+        }),
+      api.fetchTimelineTopics().then((data) => {
         if (data.success) {
-          setNodes(data.nodes || []);
-          setLinks(data.links || []);
-          if (data.nodes && data.nodes.length > 0) {
-            setSelectedNode(data.nodes[0]);
+          setTimelineTopics(data.topics || []);
+          if (data.topics && data.topics.length > 0) {
+            setSelectedTimelineTopic(data.topics[0]);
           }
         }
-      })
+      }).catch(() => {}),
+    ])
       .catch((err) => console.error('Failed to load Knowledge Graph:', err))
       .finally(() => setIsLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!selectedTimelineTopic) return;
+    setIsLoadingTimeline(true);
+    api.fetchTimeline(selectedTimelineTopic)
+      .then((data) => {
+        if (data.success) {
+          setTimelineEvents(data.events || []);
+        }
+      })
+      .catch(() => setTimelineEvents([]))
+      .finally(() => setIsLoadingTimeline(false));
+  }, [selectedTimelineTopic]);
 
   return (
     <main className="max-w-[1440px] mx-auto px-4 md:px-10 py-6 pb-28 flex flex-col gap-8">
@@ -48,7 +76,7 @@ export const KnowledgeGraphView: React.FC = () => {
           <div className="flex items-center gap-3">
             <div className="text-right hidden sm:block font-mono-caps text-xs">
               <span className="text-[#bbc9cf] block">Nodes Indexed</span>
-              <span className="text-white font-extrabold text-lg">890 Entities</span>
+              <span className="text-white font-extrabold text-lg">{nodes.length} Entities</span>
             </div>
           </div>
         </div>
@@ -212,6 +240,70 @@ export const KnowledgeGraphView: React.FC = () => {
             <span className="text-[#00D1FF]">pgvector + Neo4j Synced</span>
           </div>
         </div>
+      </div>
+
+      {/* AI Timeline Builder Section */}
+      <div className="glass-panel p-6 rounded-3xl border border-white/12 bg-[#0d0c1c]">
+        <div className="flex items-center justify-between mb-4 pb-3 border-b border-white/10">
+          <div className="flex items-center gap-2">
+            <span className="material-symbols-outlined text-[#EA4C89]">timeline</span>
+            <h3 className="font-sora font-bold text-white text-base">AI Event Timeline</h3>
+          </div>
+          <span className="text-xs font-mono-caps text-[#bbc9cf]">
+            {timelineTopics.length} Topics Tracked
+          </span>
+        </div>
+
+        {timelineTopics.length > 0 ? (
+          <>
+            <div className="flex flex-wrap gap-2 mb-4">
+              {timelineTopics.map((topic) => (
+                <button
+                  key={topic}
+                  onClick={() => setSelectedTimelineTopic(topic)}
+                  className={`px-3 py-1.5 rounded-xl text-xs font-mono-caps font-bold border transition-colors ${
+                    selectedTimelineTopic === topic
+                      ? 'bg-[#EA4C89]/20 text-[#EA4C89] border-[#EA4C89]/40'
+                      : 'bg-white/5 text-[#bbc9cf] border-white/10 hover:bg-white/10'
+                  }`}
+                >
+                  {topic}
+                </button>
+              ))}
+            </div>
+
+            {isLoadingTimeline ? (
+              <div className="flex items-center justify-center py-8">
+                <span className="material-symbols-outlined text-3xl text-[#EA4C89] animate-spin">sync</span>
+              </div>
+            ) : timelineEvents.length > 0 ? (
+              <div className="relative pl-6 border-l-2 border-[#EA4C89]/30 flex flex-col gap-4">
+                {timelineEvents.map((event) => (
+                  <div key={event.id} className="relative">
+                    <div className="absolute -left-[31px] top-1 w-3 h-3 rounded-full bg-[#EA4C89] border-2 border-[#0d0c1c]"></div>
+                    <div className="flex flex-col gap-1">
+                      <span className="text-xs font-mono-caps text-[#EA4C89] font-bold">
+                        {event.event_date || 'Date N/A'}
+                      </span>
+                      <h4 className="text-sm font-sora font-bold text-white">{event.event_title}</h4>
+                      <p className="text-xs font-hanken text-[#bbc9cf] leading-relaxed">
+                        {event.event_description}
+                      </p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="text-xs text-[#bbc9cf] py-4">
+                No timeline events yet for this topic. Run the knowledge engine to generate timelines.
+              </p>
+            )}
+          </>
+        ) : (
+          <p className="text-xs text-[#bbc9cf] py-4">
+            No timelines built yet. The AI knowledge engine automatically builds timelines when articles are processed.
+          </p>
+        )}
       </div>
     </main>
   );

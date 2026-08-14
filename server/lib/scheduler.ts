@@ -1,5 +1,6 @@
 import { Server as SocketServer } from 'socket.io';
 import { runIngestionPipeline, logIngestionRun } from './rssIngestionEngine.js';
+import { runKnowledgeEnginePipeline } from './aiKnowledgeEngine.js';
 
 type ScheduledTask = () => Promise<void>;
 
@@ -104,6 +105,36 @@ export function registerRssIngestion(io: SocketServer): void {
           articlesDuplicate: 0, aiEnriched: 0, aiFailed: 0, newArticleIds: [],
         }, duration, err.message);
         console.error('[scheduler] RSS ingestion failed:', err.message);
+      }
+    },
+  });
+}
+
+export function registerKnowledgeEngine(io: SocketServer): void {
+  const KNOWLEDGE_ENGINE_INTERVAL_MS = 45 * 60 * 1000;
+
+  registerTask({
+    name: 'ai-knowledge-engine',
+    intervalMs: KNOWLEDGE_ENGINE_INTERVAL_MS,
+    runOnStart: false,
+    task: async () => {
+      const startTime = Date.now();
+      console.log('[scheduler] Starting AI knowledge engine...');
+
+      try {
+        const result = await runKnowledgeEnginePipeline({ maxArticles: 10 });
+        const duration = Date.now() - startTime;
+
+        if (result.breakingNewsDetected > 0) {
+          io.emit('breaking_news', {
+            count: result.breakingNewsDetected,
+            timestamp: new Date().toISOString(),
+          });
+        }
+
+        console.log(`[scheduler] Knowledge engine complete in ${duration}ms: ${result.articlesProcessed} processed, ${result.entitiesExtracted} entities, ${result.relationshipsBuilt} relations, ${result.factChecksRun} fact-checks`);
+      } catch (err: any) {
+        console.error('[scheduler] Knowledge engine failed:', err.message);
       }
     },
   });
